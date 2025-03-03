@@ -129,12 +129,23 @@ def process_stock_data(file_path, window_sizes):
     results = {}
     
     for ws in window_sizes:
+        # Ensure the dataset has enough rows for the window size
+        if len(scaled_data) <= ws:
+            print(f"Skipping window size {ws}: dataset too small ({len(scaled_data)} rows).")
+            continue
+        
         # 3. Create dataset with current window size
         dataset = StockDataset(scaled_data, ws)
         
         # 4. Split into training and test sets
         train_size = int(0.8 * len(dataset))
         test_size = len(dataset) - train_size
+        
+        # Ensure train_size and test_size are positive
+        if train_size <= 0 or test_size <= 0:
+            print(f"Skipping window size {ws}: insufficient samples after splitting.")
+            continue
+        
         train_dataset, test_dataset = torch.utils.data.random_split(
             dataset, [train_size, test_size])
         
@@ -150,7 +161,7 @@ def process_stock_data(file_path, window_sizes):
         ).to(device)
         
         criterion = nn.MSELoss()
-        optimizer = optim.Adam(model.parameters(), lr=0.001)  # Add learning rate
+        optimizer = optim.Adam(model.parameters(), lr=0.001)
         
         # 7. Train the model
         print(f"\nTraining for window size {ws}")
