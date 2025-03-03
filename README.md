@@ -1,3 +1,4 @@
+# Stock Data Analysis
 In recent years, stock price prediction has attracted significant attention in financial research due to its potential impact on investment strategies and risk management. Traditional statistical models often struggle to capture the high volatility and nonlinear patterns in stock market data. In this case, Long Short-Term Memory (LSTM) networks, a type of deep learning model, have been widely adopted for time series forecasting. **LSTMs** excel at identifying long-term dependencies, making them particularly suitable for stock price prediction.
 
 This project aims to predict future opening stock prices using historical market data. The dataset is stored in the *StockDataSP500* folder, containing stock records for multiple companies with various features for analysis. The main objectives include:
