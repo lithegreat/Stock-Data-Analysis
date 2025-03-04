@@ -116,7 +116,7 @@ def evaluate_model(model, test_loader, criterion, device):
     return total_loss / len(test_loader)
 """
 
-def train_and_evaluate(model, train_loader, val_loader, criterion, optimizer, device, epochs=50):
+def train_and_evaluate(model, train_loader, val_loader, criterion, optimizer, device, epochs=20):
     history = {'train_loss': [], 'train_mae': [], 'val_loss': [], 'val_mae': []}
 
     for epoch in range(epochs):
