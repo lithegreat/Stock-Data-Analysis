@@ -5,6 +5,7 @@ from torch.utils.data import Dataset, DataLoader
 import pandas as pd
 import numpy as np
 import pickle
+import math
 from sklearn.preprocessing import MinMaxScaler
 
 
@@ -30,21 +31,72 @@ class StockDataset(Dataset):
         return self.X[idx], self.y[idx]
 
 
-# LSTM Model Definition
-class LSTMModel(nn.Module):
-    def __init__(self, input_size, hidden_size):
-        super(LSTMModel, self).__init__()
-        self.lstm = nn.LSTM(
-            input_size=input_size,
-            hidden_size=hidden_size,
-            batch_first=True
-        )
-        self.linear = nn.Linear(hidden_size, 1)
+# Positional Encoding for Transformer
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=100, dropout=0.1):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        # Create positional encoding matrix
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)  # [1, max_len, d_model]
+
+        self.register_buffer('pe', pe)
 
     def forward(self, x):
-        lstm_out, (h_n, c_n) = self.lstm(x)
-        last_out = lstm_out[:, -1, :]
-        return self.linear(last_out)
+        # x: [batch_size, seq_len, d_model]
+        x = x + self.pe[:, :x.size(1), :]
+        return self.dropout(x)
+
+
+# Transformer Model for Stock Prediction
+class TransformerModel(nn.Module):
+    def __init__(self, input_size, d_model=64, nhead=4, num_encoder_layers=2, dim_feedforward=128, dropout=0.1):
+        super(TransformerModel, self).__init__()
+
+        # Input projection: project input features to d_model dimensions
+        self.input_projection = nn.Linear(input_size, d_model)
+
+        # Positional encoding
+        self.pos_encoder = PositionalEncoding(d_model, dropout=dropout)
+
+        # Transformer encoder
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            batch_first=True
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_encoder_layers)
+
+        # Output layer
+        self.fc_out = nn.Linear(d_model, 1)
+
+        self.d_model = d_model
+
+    def forward(self, x):
+        # x: [batch_size, seq_len, input_size]
+
+        # Project input to d_model dimensions
+        x = self.input_projection(x) * math.sqrt(self.d_model)
+
+        # Add positional encoding
+        x = self.pos_encoder(x)
+
+        # Pass through transformer encoder
+        x = self.transformer_encoder(x)
+
+        # Use the last time step's output for prediction
+        x = x[:, -1, :]  # [batch_size, d_model]
+
+        # Output prediction
+        return self.fc_out(x)
 
 
 def read_and_preprocess(file_path):
@@ -78,7 +130,7 @@ def read_and_preprocess(file_path):
 
 
 def train_and_evaluate(model, train_loader, val_loader, criterion, optimizer, device, epochs=50):
-    """Train the LSTM model and record history"""
+    """Train the Transformer model and record history"""
     history = {'train_loss': [], 'train_mae': [], 'val_loss': [], 'val_mae': []}
 
     for epoch in range(epochs):
@@ -138,8 +190,8 @@ def train_and_evaluate(model, train_loader, val_loader, criterion, optimizer, de
     return history
 
 
-def process_stock_data(file_path, window_sizes, hidden_size=50, epochs=50):
-    """Main pipeline for processing stock data"""
+def process_stock_data(file_path, window_sizes, d_model=64, nhead=4, num_layers=2, epochs=50):
+    """Main pipeline for processing stock data with Transformer"""
     # 1. Read and preprocess data
     raw_data = read_and_preprocess(file_path).values
 
@@ -171,7 +223,6 @@ def process_stock_data(file_path, window_sizes, hidden_size=50, epochs=50):
             continue
 
         # Time-series split: use first 80% for training, last 20% for testing
-        # (avoid data leakage by not using random_split)
         train_dataset = torch.utils.data.Subset(dataset, range(0, train_size))
         test_dataset = torch.utils.data.Subset(dataset, range(train_size, len(dataset)))
 
@@ -179,18 +230,22 @@ def process_stock_data(file_path, window_sizes, hidden_size=50, epochs=50):
         train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
         test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
-        # 6. Initialize model
+        # 6. Initialize Transformer model
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        model = LSTMModel(
+        model = TransformerModel(
             input_size=scaled_data.shape[1],
-            hidden_size=hidden_size
+            d_model=d_model,
+            nhead=nhead,
+            num_encoder_layers=num_layers,
+            dim_feedforward=d_model * 2,
+            dropout=0.1
         ).to(device)
 
         criterion = nn.MSELoss()
         optimizer = optim.Adam(model.parameters(), lr=0.001)
 
         # 7. Train the model
-        print(f"\nTraining for window size {ws}")
+        print(f"\nTraining Transformer for window size {ws}")
         history = train_and_evaluate(model, train_loader, test_loader, criterion, optimizer, device, epochs=epochs)
 
         # 8. Collect predictions
@@ -220,15 +275,29 @@ if __name__ == "__main__":
     window_sizes = [10, 20, 50]
     stock_files = ['data/dax40.csv', 'data/dji.csv', 'data/ftse100.csv', 'data/sp500.csv']
 
+    # Transformer hyperparameters
+    d_model = 64      # Embedding dimension
+    nhead = 4         # Number of attention heads
+    num_layers = 2    # Number of transformer encoder layers
+    epochs = 50
+
     # Process all stock files
     final_results = {}
     for file in stock_files:
         stock_name = file.split('.')[0]
-        print(f"\nProcessing {stock_name}...")
-        final_results[stock_name] = process_stock_data(file, window_sizes)
+        print(f"\nProcessing {stock_name} with Transformer...")
+        final_results[stock_name] = process_stock_data(
+            file, window_sizes,
+            d_model=d_model,
+            nhead=nhead,
+            num_layers=num_layers,
+            epochs=epochs
+        )
 
     # Compare results
-    print("\nFinal Results:")
+    print("\n" + "="*60)
+    print("Final Results (Transformer Model):")
+    print("="*60)
     for stock, res in final_results.items():
         print(f"\n{stock}:")
         if not res:
@@ -240,6 +309,6 @@ if __name__ == "__main__":
             print(f"  Window {ws}: Val Loss: {final_val_loss:.4f}, Val MAE: {final_val_mae:.4f}")
 
     # Save results to file
-    with open('final_results.pkl', 'wb') as f:
+    with open('final_results_transformer.pkl', 'wb') as f:
         pickle.dump(final_results, f)
-    print("\nAll results saved to final_results.pkl")
+    print("\nAll results saved to final_results_transformer.pkl")
